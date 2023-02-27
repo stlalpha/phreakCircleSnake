@@ -91,18 +91,19 @@ def run_code(code):
     return stdout.decode()
 
 # Define a function to add a conversation item to the conversation history
-
-
-def add_conversation_item(speaker, prompt, conversation_history):
+def add_conversation_item(prompt, role=PROGRAM_NAME, conversation_history=conversation_history):
     conversation_history.append({
-        "speaker": speaker,
+        "role": role,
         "prompt": prompt,
         "timestamp": time.time()
     })
 
+
+
 # Define a function to display the session status message
 
 
+# Define a function to display the session status message
 def display_status_message(stdscr, session_state, conversation_history):
     # Set up the color scheme for the session state
     if session_state == SessionState.INITIALIZING:
@@ -118,15 +119,9 @@ def display_status_message(stdscr, session_state, conversation_history):
         color = StatusColor.PROCESSING_PROMPT
         status_text = "EXECUTING PYTHON"
 
-    # Get the last conversation item
-    last_item = conversation_history[-1] if conversation_history else None
-
     # Set the status message based on the current system state and the last conversation item
     if session_state == SessionState.WAITING_FOR_PROMPT:
-        if last_item is not None and last_item["speaker"] == PROGRAM_NAME:
-            status_message = "SYSTEM: PYTHON SNIPPET EXECUTED. AWAITING PROMPT."
-        else:
-            status_message = "SYSTEM STATUS: RUNNING. ENTER PROMPT."
+        status_message = "SYSTEM STATUS: RUNNING. ENTER PROMPT."
     elif session_state == SessionState.PROCESSING_PROMPT:
         status_message = "SYSTEM: PROCESSING PROMPT. PLEASE WAIT."
     elif session_state == SessionState.EXECUTING_PYTHON:
@@ -158,46 +153,48 @@ def display_conversation_history(stdscr, conversation_history):
 
     # Display each item in the conversation history
     for i, item in enumerate(conversation_history):
-        speaker = item["speaker"]
+        role = item["role"]
         prompt = item["prompt"]
         timestamp = item["timestamp"]
 
         # Set up the color scheme for the conversation item
-        # Set up the color scheme for the conversation item
-        if speaker == PROGRAM_NAME:
+        if role == PROGRAM_NAME:
             color = StatusColor.CONVERSATION_ITEM
         else:
             color = StatusColor.DEFAULT
 
         # Display the conversation item in color
         stdscr.attron(curses.color_pair(color.value))
-        stdscr.addstr(i+1, 0, f"{speaker}: {prompt} ({timestamp})")
+        stdscr.addstr(i+1, 0, f"{role}: {prompt} ({timestamp})")
         stdscr.attroff(curses.color_pair(color.value))
 
     # Refresh the screen
     stdscr.refresh()
 
+
 session_state = SessionState.INITIALIZING
 # Define the main function for the program
-def main(stdscr, conversation_history):
-    # Set up the session state
-    session_state = SessionState.INITIALIZING
+def main(stdscr):
     # Set up the conversation history
 
     # Display the initial status message
-    display_status_message(stdscr, session_state, conversation_history)
+    display_status_message(stdscr, SessionState.INITIALIZING)
 
     # Warm up the AI
-    response = send_prompt(WARM_UP_PROMPT)
-    add_conversation_item(PROGRAM_NAME, WARM_UP_PROMPT, conversation_history)
-    add_conversation_item("OpenAI", response, conversation_history)
+    with open('warm_up_prompt.txt', 'r') as f:
+        warm_up_prompt = f.read()
+
+    response = send_prompt(warm_up_prompt)
+    add_conversation_item(warm_up_prompt)
+    add_conversation_item(response, role="OpenAI")
 
     # Display the conversation history
     display_conversation_history(stdscr, conversation_history)
 
     # Set the session state to waiting for a prompt
-    session_state = SessionState.WAITING_FOR_PROMPT
-    display_status_message(stdscr, session_state, conversation_history)
+    display_status_message(stdscr, SessionState.WAITING_FOR_PROMPT)
+
+
 
 
 # Set up the session state
@@ -219,61 +216,32 @@ session_state = SessionState.WAITING_FOR_PROMPT
 display_status_message(stdscr, session_state, conversation_history)
 
 # Enter the main loop for the program
+# Enter the main loop for the program
 while True:
     
     # Wait for user input
     user_input = stdscr.getstr().decode()
     #exit if user enters q
-    if user_input == '[Qq]':
+    if user_input == 'q':
         break
 
     # Send the prompt to the AI and get the response
     response = send_prompt(user_input)
 
     # Add the prompt and response to the conversation history
-    add_conversation_item("Moderator", user_input, conversation_history)
-    add_conversation_item("OpenAI", response, conversation_history)
+    add_conversation_item(user_input)
+    add_conversation_item(response, role="OpenAI")
 
     # Display the conversation history
     display_conversation_history(stdscr, conversation_history)
 
     # Refresh the screen
     stdscr.refresh()
-    
-    # Wait for user input
-    user_input = stdscr.getstr().decode()
 
-    if session_state == SessionState.WAITING_FOR_PROMPT:
-        # Send the prompt to the AI and get the response
-        response = send_prompt(user_input)
+    if "@PYTHON@" in response:
+        # Extract the code and run it
+        code = response.split("@PYTHON@")[1]
 
-        # If the response contains the trigger prefix "@PYTHON@", extract the code and run it
-        if "@PYTHON@" in response:
-            code = response.split("@PYTHON@")[-1].strip()
-            output = run_code(code)
-
-            # Add the code and output to the conversation history
-            add_conversation_item("OpenAI", response, conversation_history)
-            add_conversation_item(PROGRAM_NAME, output, conversation_history)
-
-            # Display the conversation history
-            display_conversation_history(stdscr, conversation_history)
-        else:
-            # Add the prompt and response to the conversation history
-            add_conversation_item("Moderator", user_input,
-                                  conversation_history)
-            add_conversation_item("OpenAI", response, conversation_history)
-
-            # Display the conversation history
-            display_conversation_history(stdscr, conversation_history)
-
-        # Set the session state to processing the prompt
-        session_state = SessionState.PROCESSING_PROMPT
-        display_status_message(stdscr, session_state)
-
-        # Set the session state back to waiting for a prompt
-        session_state = SessionState.WAITING_FOR_PROMPT
-        display_status_message(stdscr, session_state)
 
 
 # Start the program
