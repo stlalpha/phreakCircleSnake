@@ -1,250 +1,131 @@
-import subprocess
-import json
-import time
 import openai
-import os
-import curses
-from curses import wrapper
-from enum import Enum
+import json
+import ast
+import subprocess
+import itertools
+from threading import Thread
+import time
+from typing import List, Dict, Any
+from typing import Tuple, Optional
+from queue import Queue
+import io
+from contextlib import redirect_stdout, redirect_stderr
 
-# Define the name of the program
-PROGRAM_NAME = "CircleSnake"
-
-# Set up OpenAI credentials
+# Set up OpenAI API credentials
 with open('creds.json') as f:
     data = json.load(f)
     openai.api_key = data['openai_davinci_key']
-# Define the warm-up prompt to instruct the AI on how to interact with CircleSnake
-WARM_UP_PROMPT = """Hi Davinci, welcome to our Python programming session! As a quick warm-up exercise, can you please write a non-interactive Python snippet prefixed with "@PYTHON@" that takes two integers as input and calculates their sum? Please note that if your code produces any errors or outputs to stdout, we will be able to see them in our console, so make sure to test your code thoroughly. Thanks!"
 
-Example #1
+# establish default session warm-up prompt.
+default_prompt = "Let's work together to create some Python code. What do you want to make?"
 
-DaVinci: @PYTHON@ Print('Hello, world!')
-User: Exit code: 0. Output: Hello, world!
-
-Example #2
-
-DaVinci: @PYTHON@ f = lambda x: [[y for j, y in enumerate(set(x)) if (i >> j) & 1] for i in range(2**len(set(x)))];f([10,9,1,10,9,1,1,1,10,9,7])
+# Send prompt to OpenAI API
 
 
-."""
+def generate_response(prompt: str) -> str:
+    response = openai.Completion.create(engine="text-davinci-002", prompt=prompt, max_tokens=50,
+                                        n=1, stop=None, temperature=0.6, presence_penalty=0.6, frequency_penalty=0.5)
+    bot_response = response.choices[0].text.strip()
+    print(f"Generated response: {bot_response}")
+    return bot_response
 
 
-conversation_history = []
-
-# Define the possible states for the session
-
-
-class SessionState(Enum):
-    INITIALIZING = 0
-    WAITING_FOR_PROMPT = 1
-    PROCESSING_PROMPT = 2
-    EXECUTING_PYTHON = 3
-# Define a color scheme for the status messages
-
-
-class StatusColor(Enum):
-    DEFAULT = 0
-    INITIALIZING = 1
-    WAITING_FOR_PROMPT = 2
-    PROCESSING_PROMPT = 3
-    CONVERSATION_ITEM = 4
-
-
-stdscr = curses.initscr()
-curses.start_color()
-curses.use_default_colors()
-curses.noecho()
-curses.cbreak()
-stdscr.keypad(True)
-# Set up the curses color pairs
-curses.init_pair(StatusColor.INITIALIZING.value,
-                 curses.COLOR_YELLOW, curses.COLOR_BLACK)
-curses.init_pair(StatusColor.WAITING_FOR_PROMPT.value,
-                 curses.COLOR_GREEN, curses.COLOR_BLACK)
-curses.init_pair(StatusColor.PROCESSING_PROMPT.value,
-                 curses.COLOR_CYAN, curses.COLOR_BLACK)
-curses.init_pair(StatusColor.CONVERSATION_ITEM.value,
-                 curses.COLOR_WHITE, curses.COLOR_BLACK)
-
-# Define a function to send a prompt to the AI and return the response
-
-
-def send_prompt(prompt):
-    response = openai.Completion.create(
-        engine="text-davinci-002",
-        prompt=prompt,
-        max_tokens=1024,
-        n=1,
-        stop=None,
-        temperature=0.5
-    )
-    return response.choices[0].text.strip()
-
-
-# Define a function to run a code snippet in CircleSnake and return the output
-def run_code(code):
-    subprocess_proc = subprocess.Popen(
-        ['python'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-    stdout, stderr = subprocess_proc.communicate(code.encode())
-
-    return stdout.decode()
-
-# Define a function to add a conversation item to the conversation history
-def add_conversation_item(prompt, role=PROGRAM_NAME, conversation_history=conversation_history):
-    conversation_history.append({
-        "role": role,
-        "prompt": prompt,
-        "timestamp": time.time()
-    })
+def parse_python_code(input_string: str) -> Optional[ast.Module]:
+    try:
+        # Parse the input string into an AST tree
+        tree = ast.parse(input_string)
+        valid_code = ast.unparse(tree).strip()
+        print("The input string contains valid Python code: ", valid_code)
+        if isinstance(tree, ast.Module) and len(tree.body) > 0:
+            return tree
+    except SyntaxError:
+        print("The input string does not contain valid Python code.")
+    return None
 
 
 
-# Define a function to display the session status message
 
 
-# Define a function to display the session status message
-def display_status_message(stdscr, session_state, conversation_history):
-    # Set up the color scheme for the session state
-    if session_state == SessionState.INITIALIZING:
-        color = StatusColor.INITIALIZING
-        status_text = "INITIALIZING"
-    elif session_state == SessionState.WAITING_FOR_PROMPT:
-        color = StatusColor.WAITING_FOR_PROMPT
-        status_text = "WAITING FOR PROMPT"
-    elif session_state == SessionState.PROCESSING_PROMPT:
-        color = StatusColor.PROCESSING_PROMPT
-        status_text = "PROCESSING PROMPT"
-    elif session_state == SessionState.EXECUTING_PYTHON:
-        color = StatusColor.PROCESSING_PROMPT
-        status_text = "EXECUTING PYTHON"
+def read_output() -> Tuple[str, str]:
+    stdout_output = ''
+    stderr_output = ''
+    while True:
+        stdout_line = process.stdout.readline().decode('utf-8')
+        stderr_line = process.stderr.readline().decode('utf-8')
+        if not stdout_line and not stderr_line and process.poll() is not None:
+            break
+        if stdout_line:
+            stdout_output += stdout_line
+        if stderr_line:
+            stderr_output += stderr_line
+    return stdout_output, stderr_output
 
-    # Set the status message based on the current system state and the last conversation item
-    if session_state == SessionState.WAITING_FOR_PROMPT:
-        status_message = "SYSTEM STATUS: RUNNING. ENTER PROMPT."
-    elif session_state == SessionState.PROCESSING_PROMPT:
-        status_message = "SYSTEM: PROCESSING PROMPT. PLEASE WAIT."
-    elif session_state == SessionState.EXECUTING_PYTHON:
-        status_message = "SYSTEM: EXECUTING PYTHON SNIPPET. PLEASE WAIT."
+
+
+
+def run_code(input_string: str, imports: List[str] = []) -> Optional[Tuple[str, str]]:
+    # Parse the input string into an AST tree
+    tree = parse_python_code(input_string)
+    if tree is not None:
+        # Create a custom namespace to use as the global and local scope
+        namespace = {}
+        # Add any necessary imports to the namespace
+        for import_stmt in imports:
+            exec(import_stmt, namespace)
+        # Redirect the output of print statements to a StringIO object
+        with io.StringIO() as stdout_buffer, io.StringIO() as stderr_buffer:
+            with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+                # Execute the modified code represented by the AST tree in the custom namespace
+                exec(compile(tree, "<string>", "exec"), namespace)
+                stdout_output, stderr_output = stdout_buffer.getvalue(), stderr_buffer.getvalue()
+        print('stdout_output:', stdout_output)  # added
+        print('stderr_output:', stderr_output)  # added
+        return stdout_output.strip(), stderr_output.strip()
     else:
-        print("ERROR: INVALID SESSION STATE.")
-        print(session_state)
-        status_message = "SYSTEM: ERROR. PLEASE CONTACT SUPPORT."
-
-    # Clear the status line
-    stdscr.move(0, 0)
-    stdscr.clrtoeol()
-
-    # Display the status message and session state in color
-    stdscr.attron(curses.color_pair(color.value))
-    stdscr.addstr(0, 0, f"{status_message} ({status_text})")
-    stdscr.attroff(curses.color_pair(color.value))
-
-    # Refresh the screen
-    stdscr.refresh()
+        print("The input string does not contain valid Python code.")
+        return None
 
 
-# Define a function to display the conversation history
 
 
-def display_conversation_history(stdscr, conversation_history):
-    # Clear the screen
-    stdscr.clear()
 
-    # Display each item in the conversation history
-    for i, item in enumerate(conversation_history):
-        role = item["role"]
-        prompt = item["prompt"]
-        timestamp = item["timestamp"]
 
-        # Set up the color scheme for the conversation item
-        if role == PROGRAM_NAME:
-            color = StatusColor.CONVERSATION_ITEM
+
+def warm_up_prompt() -> str:
+    print("Let's start with a warm-up prompt to get the conversation going.")
+    print("Type your warm-up prompt to the bot or press Enter to use the default prompt.")
+    user_input = input()
+    if user_input == "":
+        print("Using default prompt.")
+        prompt = default_prompt
+    else:
+        prompt = user_input
+    return prompt
+
+
+def main() -> None:
+    prompt = warm_up_prompt()
+    imports = []
+    while True:
+        print("User:", end=" ")
+        user_input = input()
+        if user_input.lower() == 'quit':
+            print('Goodbye!')
+            break
+
+        bot_response = generate_response(prompt + "\n" + user_input)
+
+        output = run_code(bot_response, imports)
+
+        # If the output is an import statement, add it to the list of imports
+        if output and ("import" in output or "from" in output):
+            imports.append(output)
         else:
-            color = StatusColor.DEFAULT
-
-        # Display the conversation item in color
-        stdscr.attron(curses.color_pair(color.value))
-        stdscr.addstr(i+1, 0, f"{role}: {prompt} ({timestamp})")
-        stdscr.attroff(curses.color_pair(color.value))
-
-    # Refresh the screen
-    stdscr.refresh()
-
-
-session_state = SessionState.INITIALIZING
-# Define the main function for the program
-def main(stdscr):
-    # Set up the conversation history
-
-    # Display the initial status message
-    display_status_message(stdscr, SessionState.INITIALIZING)
-
-    # Warm up the AI
-    with open('warm_up_prompt.txt', 'r') as f:
-        warm_up_prompt = f.read()
-
-    response = send_prompt(warm_up_prompt)
-    add_conversation_item(warm_up_prompt)
-    add_conversation_item(response, role="OpenAI")
-
-    # Display the conversation history
-    display_conversation_history(stdscr, conversation_history)
-
-    # Set the session state to waiting for a prompt
-    display_status_message(stdscr, SessionState.WAITING_FOR_PROMPT)
+            print("Bot:", output)
+            prompt = bot_response
 
 
 
 
-# Set up the session state
-session_state = SessionState.INITIALIZING
-
-# Display the initial status message
-display_status_message(stdscr, session_state, conversation_history)
-
-# Warm up the AI
-response = send_prompt(WARM_UP_PROMPT)
-add_conversation_item(PROGRAM_NAME, WARM_UP_PROMPT, conversation_history)
-add_conversation_item("OpenAI", response, conversation_history)
-
-# Display the conversation history
-display_conversation_history(stdscr, conversation_history)
-
-# Set the session state to waiting for a prompt
-session_state = SessionState.WAITING_FOR_PROMPT
-display_status_message(stdscr, session_state, conversation_history)
-
-# Enter the main loop for the program
-# Enter the main loop for the program
-while True:
-    
-    # Wait for user input
-    user_input = stdscr.getstr().decode()
-    #exit if user enters q
-    if user_input == 'q':
-        break
-
-    # Send the prompt to the AI and get the response
-    response = send_prompt(user_input)
-
-    # Add the prompt and response to the conversation history
-    add_conversation_item(user_input)
-    add_conversation_item(response, role="OpenAI")
-
-    # Display the conversation history
-    display_conversation_history(stdscr, conversation_history)
-
-    # Refresh the screen
-    stdscr.refresh()
-
-    if "@PYTHON@" in response:
-        # Extract the code and run it
-        code = response.split("@PYTHON@")[1]
-
-
-
-# Start the program
-wrapper(main, conversation_history, session_state)
-
-
+if __name__ == "__main__":
+    main()
