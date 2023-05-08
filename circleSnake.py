@@ -39,7 +39,7 @@ def parse_python_code(input_string: str) -> Optional[ast.Module]:
         if isinstance(tree, ast.Module) and len(tree.body) > 0:
             return tree
     except SyntaxError:
-        print("The input string does not contain valid Python code.")
+        print("Bot: " + input_string)
     return None
 
 
@@ -121,8 +121,9 @@ def main() -> None:
         if output and ("import" in output or "from" in output):
             imports.append(output)
         else:
-            print("Bot:", output)
+            print("OpenAI API Python Execution Output:", output)
             prompt = bot_response
+ 
 
 
 
